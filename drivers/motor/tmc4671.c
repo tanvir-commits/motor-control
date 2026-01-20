@@ -1,5 +1,6 @@
 #include "tmc4671.h"
 #include "pio.h"
+#include "pio_uart.h"
 #include <string.h>
 
 /* External SPI chip select pin - configure in your HAL */
@@ -9,12 +10,32 @@ extern uint16_t TMC4671_CS_PIN;
 /* Global register cache */
 tmc4671_reg_cache_t tmc4671_regs = {0};
 
+/* Communication interface selection */
+static tmc4671_interface_t tmc4671_interface = TMC4671_IF_SPI;  /* Default to SPI */
+
 /* Configuration for Maxon DCX08M EB KL 2.4V + ENX 8 MAG 256IMP + GPX08 A 64:1 */
 #define ENCODER_BASE_COUNTS_PER_REV  256   /* ENX 8 MAG base resolution */
 #define ENCODER_QUAD_MULTIPLIER      4     /* 4× quadrature */
 #define ENCODER_EFFECTIVE_COUNTS     (ENCODER_BASE_COUNTS_PER_REV * ENCODER_QUAD_MULTIPLIER)  /* 1024 ticks/motor rev */
 #define GEAR_RATIO                  64     /* GPX08 A 64:1 gear ratio */
 #define LEADSCREW_LEAD_MM           2.0   /* mm per output shaft revolution (adjust for your application) */
+
+/* CRC-8 calculation for UART protocol */
+static uint8_t tmc4671_uart_crc8(uint8_t* data, uint8_t len)
+{
+    uint8_t crc = 0;
+    for (uint8_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            if (crc & 0x80) {
+                crc = (crc << 1) ^ 0x07;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
 
 /* SPI Transfer Function */
 static uint32_t tmc4671_spi_transfer(uint8_t address, uint32_t value, bool is_write)
@@ -39,15 +60,59 @@ static uint32_t tmc4671_spi_transfer(uint8_t address, uint32_t value, bool is_wr
            ((uint32_t)rx[4]);
 }
 
-/* Register Read/Write */
+/* UART Transfer Function */
+static uint32_t tmc4671_uart_transfer(uint8_t address, uint32_t value, bool is_write)
+{
+    uint8_t tx[8];
+    uint8_t rx[8] = {0};
+    
+    /* Prepare UART frame: Sync(1) + Node(1) + Address(1) + Data(4) + CRC(1) = 8 bytes */
+    tx[0] = TMC4671_UART_SYNC_BYTE;
+    tx[1] = TMC4671_UART_NODE_ADDRESS;
+    tx[2] = address;
+    tx[3] = (value >> 24) & 0xFF;
+    tx[4] = (value >> 16) & 0xFF;
+    tx[5] = (value >> 8) & 0xFF;
+    tx[6] = value & 0xFF;
+    tx[7] = tmc4671_uart_crc8(tx, 7);  /* CRC of first 7 bytes */
+    
+    /* Transfer via PAL/PIO layer */
+    pio_uart_transfer(tx, 8, rx, 8);
+    
+    /* For reads, return data from response (bytes 3-6) */
+    if (!is_write && rx[0] == TMC4671_UART_SYNC_BYTE) {
+        return ((uint32_t)rx[3] << 24) |
+               ((uint32_t)rx[4] << 16) |
+               ((uint32_t)rx[5] << 8)  |
+               ((uint32_t)rx[6]);
+    }
+    
+    return 0;
+}
+
+/* Register Read/Write - uses selected interface */
 uint32_t tmc4671_read_reg(uint8_t address)
 {
-    return tmc4671_spi_transfer(address, 0, false);
+    if (tmc4671_interface == TMC4671_IF_UART) {
+        return tmc4671_uart_transfer(address, 0, false);
+    } else {
+        return tmc4671_spi_transfer(address, 0, false);
+    }
 }
 
 void tmc4671_write_reg(uint8_t address, uint32_t value)
 {
-    tmc4671_spi_transfer(address, value, true);
+    if (tmc4671_interface == TMC4671_IF_UART) {
+        tmc4671_uart_transfer(address, value, true);
+    } else {
+        tmc4671_spi_transfer(address, value, true);
+    }
+}
+
+/* Interface Selection */
+void tmc4671_set_interface(tmc4671_interface_t interface)
+{
+    tmc4671_interface = interface;
 }
 
 /* Register Cache Synchronization */

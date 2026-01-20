@@ -25,9 +25,20 @@
 #define TMC4671_REG_ACTUAL_VELOCITY         0x6B
 #define TMC4671_REG_ACTUAL_TORQUE           0x6C
 
+/* Communication Interface Selection */
+typedef enum {
+    TMC4671_IF_SPI = 0,    /* SPI interface (default) */
+    TMC4671_IF_UART = 1    /* UART/LPUART interface */
+} tmc4671_interface_t;
+
 /* SPI Read/Write Bit Masks */
 #define TMC4671_WRITE_BIT                   0x80
 #define TMC4671_READ_BIT                    0x00
+
+/* UART Protocol Constants */
+#define TMC4671_UART_SYNC_BYTE              0x05
+#define TMC4671_UART_NODE_ADDRESS           0x01    /* Default node address */
+#define TMC4671_UART_BAUD_RATE              115200   /* Default baud rate */
 
 /* Register Bitfield Structures */
 typedef union {
@@ -92,6 +103,7 @@ extern tmc4671_reg_cache_t tmc4671_regs;
 
 /* Initialization */
 void tmc4671_init(void);
+void tmc4671_set_interface(tmc4671_interface_t interface);  /* Select SPI or UART */
 
 /* Register Read/Write */
 uint32_t tmc4671_read_reg(uint8_t address);
