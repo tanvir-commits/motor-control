@@ -21,6 +21,8 @@ static tmc4671_interface_t tmc4671_interface = TMC4671_IF_SPI;  /* Default to SP
 #define LEADSCREW_LEAD_MM           2.0   /* mm per output shaft revolution (adjust for your application) */
 
 /* CRC-8 calculation for UART protocol */
+/* Polynomial: x^8 + x^2 + x^1 + 1 (0x07) */
+/* Calculated over all bytes in datagram except CRC byte itself */
 static uint8_t tmc4671_uart_crc8(uint8_t* data, uint8_t len)
 {
     uint8_t crc = 0;
@@ -28,7 +30,7 @@ static uint8_t tmc4671_uart_crc8(uint8_t* data, uint8_t len)
         crc ^= data[i];
         for (uint8_t j = 0; j < 8; j++) {
             if (crc & 0x80) {
-                crc = (crc << 1) ^ 0x07;
+                crc = (crc << 1) ^ TMC4671_UART_CRC_POLYNOMIAL;  /* 0x07 */
             } else {
                 crc <<= 1;
             }
@@ -61,30 +63,50 @@ static uint32_t tmc4671_spi_transfer(uint8_t address, uint32_t value, bool is_wr
 }
 
 /* UART Transfer Function */
+/* Protocol: 8N1 (8 data bits, no parity, 1 stop bit) */
+/* Write: Sync(0x05) + Node(0x01) + Addr(OR 0x80) + Data(4) + CRC(1) = 8 bytes */
+/* Read Request: Sync(0x05) + Node(0x01) + Addr + CRC(1) = 4 bytes */
+/* Read Response: Sync(0x05) + Node(0x01) + Addr + Data(4) + CRC(1) = 8 bytes */
 static uint32_t tmc4671_uart_transfer(uint8_t address, uint32_t value, bool is_write)
 {
     uint8_t tx[8];
     uint8_t rx[8] = {0};
     
-    /* Prepare UART frame: Sync(1) + Node(1) + Address(1) + Data(4) + CRC(1) = 8 bytes */
-    tx[0] = TMC4671_UART_SYNC_BYTE;
-    tx[1] = TMC4671_UART_NODE_ADDRESS;
-    tx[2] = address;
-    tx[3] = (value >> 24) & 0xFF;
-    tx[4] = (value >> 16) & 0xFF;
-    tx[5] = (value >> 8) & 0xFF;
-    tx[6] = value & 0xFF;
-    tx[7] = tmc4671_uart_crc8(tx, 7);  /* CRC of first 7 bytes */
-    
-    /* Transfer via PAL/PIO layer */
-    pio_uart_transfer(tx, 8, rx, 8);
-    
-    /* For reads, return data from response (bytes 3-6) */
-    if (!is_write && rx[0] == TMC4671_UART_SYNC_BYTE) {
-        return ((uint32_t)rx[3] << 24) |
-               ((uint32_t)rx[4] << 16) |
-               ((uint32_t)rx[5] << 8)  |
-               ((uint32_t)rx[6]);
+    if (is_write) {
+        /* Write frame: 8 bytes */
+        tx[0] = TMC4671_UART_SYNC_BYTE;                    /* Sync byte */
+        tx[1] = TMC4671_UART_NODE_ADDRESS;                 /* Master address */
+        tx[2] = address | TMC4671_UART_WRITE_BIT;          /* Register address OR 0x80 for write */
+        tx[3] = (value >> 24) & 0xFF;                      /* Data MSB */
+        tx[4] = (value >> 16) & 0xFF;
+        tx[5] = (value >> 8) & 0xFF;
+        tx[6] = value & 0xFF;                              /* Data LSB */
+        tx[7] = tmc4671_uart_crc8(tx, 7);                  /* CRC of bytes 0-6 */
+        
+        /* Transfer via PAL/PIO layer */
+        pio_uart_transfer(tx, 8, NULL, 0);
+    } else {
+        /* Read request: 4 bytes */
+        tx[0] = TMC4671_UART_SYNC_BYTE;                    /* Sync byte */
+        tx[1] = TMC4671_UART_NODE_ADDRESS;                 /* Master address */
+        tx[2] = address;                                   /* Register address (no 0x80 for read) */
+        tx[3] = tmc4671_uart_crc8(tx, 3);                  /* CRC of bytes 0-2 */
+        
+        /* Transfer request and receive response */
+        pio_uart_transfer(tx, 4, rx, 8);
+        
+        /* Parse response: bytes 3-6 contain the 32-bit data */
+        if (rx[0] == TMC4671_UART_SYNC_BYTE && rx[1] == TMC4671_UART_NODE_ADDRESS) {
+            /* Verify CRC of response (bytes 0-6) */
+            uint8_t calc_crc = tmc4671_uart_crc8(rx, 7);
+            if (calc_crc == rx[7]) {
+                /* Return data from response (bytes 3-6, Big Endian) */
+                return ((uint32_t)rx[3] << 24) |
+                       ((uint32_t)rx[4] << 16) |
+                       ((uint32_t)rx[5] << 8)  |
+                       ((uint32_t)rx[6]);
+            }
+        }
     }
     
     return 0;

@@ -37,8 +37,10 @@ typedef enum {
 
 /* UART Protocol Constants */
 #define TMC4671_UART_SYNC_BYTE              0x05
-#define TMC4671_UART_NODE_ADDRESS           0x01    /* Default node address */
-#define TMC4671_UART_BAUD_RATE              115200   /* Default baud rate */
+#define TMC4671_UART_NODE_ADDRESS           0x01    /* Default node address (master address) */
+#define TMC4671_UART_BAUD_RATE              115200   /* Default baud rate (can be up to 1 Mbps) */
+#define TMC4671_UART_WRITE_BIT              0x80    /* OR with address for write operations */
+#define TMC4671_UART_CRC_POLYNOMIAL         0x07    /* CRC-8 polynomial: x^8 + x^2 + x^1 + 1 */
 
 /* Register Bitfield Structures */
 typedef union {

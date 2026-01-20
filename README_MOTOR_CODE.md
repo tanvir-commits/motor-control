@@ -116,10 +116,15 @@ tmc4671_set_interface(TMC4671_IF_UART);
 ```
 
 **UART Protocol Details:**
-- Sync byte: 0x05
-- Node address: 0x01 (default)
-- Frame: Sync(1) + Node(1) + Address(1) + Data(4) + CRC(1) = 8 bytes
-- CRC-8 polynomial: 0x07
+- **Format**: 8N1 (8 data bits, no parity, 1 stop bit)
+- **Baud Rate**: 115200 bps (default, can be up to 1 Mbps)
+- **Sync byte**: 0x05 (always first byte)
+- **Node address**: 0x01 (default master address)
+- **Write frame**: Sync(1) + Node(1) + Address(OR 0x80)(1) + Data(4) + CRC(1) = 8 bytes
+- **Read request**: Sync(1) + Node(1) + Address(1) + CRC(1) = 4 bytes
+- **Read response**: Sync(1) + Node(1) + Address(1) + Data(4) + CRC(1) = 8 bytes
+- **CRC-8**: Polynomial x^8 + x^2 + x^1 + 1 (0x07), calculated over all bytes except CRC byte
+- **Data format**: Big Endian (MSB first)
 
 ### 2. PAL/PIO SPI Function (for SPI interface)
 The code calls `pio_spi_transfer_cs()` which should be implemented in your PAL/PIO layer:
